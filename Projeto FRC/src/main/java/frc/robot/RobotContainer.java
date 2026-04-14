@@ -18,16 +18,31 @@ import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
 import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
+import frc.robot.commands.drive.TeleopDrive;
 
 public class RobotContainer {
-    private double MaxSpeed = 1.0 * TunerConstants.kSpeedAt12Volts.in(MetersPerSecond); // kSpeedAt12Volts desired top speed
-    private double MaxAngularRate = RotationsPerSecond.of(0.75).in(RadiansPerSecond); // 3/4 of a rotation per second max angular velocity
+    
 
-    /* Setting up bindings for necessary control of the swerve drive platform */
-    private final SwerveRequest.FieldCentric drive = new SwerveRequest.FieldCentric()
-            .withDeadband(MaxSpeed * 0.1).withRotationalDeadband(MaxAngularRate * 0.1) // Add a 10% deadband
-            .withDriveRequestType(DriveRequestType.OpenLoopVoltage); // Use open-loop control for drive motors
+        private final double normalSpeedFactor = 1.0;
+        private final double slowSpeedFactor = 0.35;
+        private final double normalTurnFactor = 1.0;
+        private final double slowTurnFactor = 0.4;
+
+
+
+    // private double MaxSpeed = 1 * TunerConstants.kSpeedAt12Volts.in(MetersPerSecond); // kSpeedAt12Volts desired top speed
+    // private double MaxAngularRate = RotationsPerSecond.of(0.75).in(RadiansPerSecond); // 3/4 of a rotation per second max angular velocity
+
+    // Velocidade máxima desejada do robô. Aqui limitamos a 30% (0.3) da velocidade teórica máxima a 12V.
+    private double MaxSpeed = 0.3 * TunerConstants.kSpeedAt12Volts.in(MetersPerSecond); 
+    
+    // Velocidade máxima de rotação do robô (giro no próprio eixo). Limitado a 1/4 de volta por segundo.
+    private double MaxAngularRate = RotationsPerSecond.of(0.25).in(RadiansPerSecond); 
+
+    /* Pedidos (Requests) de controle do Swerve CTRE */
+    // Trava as rodas em formato de X para o robô não ser empurrado
     private final SwerveRequest.SwerveDriveBrake brake = new SwerveRequest.SwerveDriveBrake();
+    // Aponta as rodas para um ângulo específico sem forçar movimento
     private final SwerveRequest.PointWheelsAt point = new SwerveRequest.PointWheelsAt();
 
     private final Telemetry logger = new Telemetry(MaxSpeed);
@@ -41,57 +56,73 @@ public class RobotContainer {
     }
 
     private void configureBindings() {
-        // Note that X is defined as forward according to WPILib convention,
-        // and Y is defined as to the left according to WPILib convention.
-        drivetrain.setDefaultCommand(
-            // Drivetrain will execute this command periodically
-            drivetrain.applyRequest(() ->
-                drive.withVelocityX(-joystick.getLeftY() * MaxSpeed) // Drive forward with negative Y (forward)
-                    .withVelocityY(-joystick.getLeftX() * MaxSpeed) // Drive left with negative X (left)
-                    .withRotationalRate(-joystick.getRightX() * MaxAngularRate) // Drive counterclockwise with negative X (left)
-            )
-        );
+        // Define o comando principal (padrão) do chassi como sendo a direção TeleopDrive.
+        // A convenção WPILib dita que: Eixo X é pra frente/trás e Eixo Y é esquerda/direita.
+        // Nossa classe TeleopDrive já faz a inversão necessária dos joysticks para se alinhar a isso.
 
-        // Idle while the robot is disabled. This ensures the configured
-        // neutral mode is applied to the drive motors while disabled.
+
+drivetrain.setDefaultCommand(
+    new TeleopDrive(
+        drivetrain,
+        () -> joystick.getLeftY(),
+        () -> joystick.getLeftX(),
+        () -> joystick.getRightX(),
+        () -> joystick.rightBumper().getAsBoolean(), // ✅ modo lento aqui
+        MaxSpeed,
+        MaxAngularRate
+    )
+);
+
+        // Quando o robô estiver "Disabled", aplica um pedido "Idle". 
+        // Isso garante que os motores apliquem o seu NeutralMode (Brake ou Coast) corretamente.
         final var idle = new SwerveRequest.Idle();
         RobotModeTriggers.disabled().whileTrue(
             drivetrain.applyRequest(() -> idle).ignoringDisable(true)
         );
 
-        joystick.a().whileTrue(drivetrain.applyRequest(() -> brake));
+        // Mapeamento de Botões de Ação Específica (Driver 0)
+        joystick.a().whileTrue(drivetrain.applyRequest(() -> brake)); // Botão A trava as rodas em X
         joystick.b().whileTrue(drivetrain.applyRequest(() ->
+            // Botão B aponta as rodas baseado no analógico esquerdo, útil para alinhar sem mover
             point.withModuleDirection(new Rotation2d(-joystick.getLeftY(), -joystick.getLeftX()))
         ));
 
-        // Run SysId routines when holding back/start and X/Y.
-        // Note that each routine should be run exactly once in a single log.
+        // Rotinas do SysId (Usadas apenas na fase de tunagem/characterization)
+        // Cada rotina coleta dados de física do robô para encontrar fatores de PID (Kf, Kp, Ki, Kd)
         joystick.back().and(joystick.y()).whileTrue(drivetrain.sysIdDynamic(Direction.kForward));
         joystick.back().and(joystick.x()).whileTrue(drivetrain.sysIdDynamic(Direction.kReverse));
         joystick.start().and(joystick.y()).whileTrue(drivetrain.sysIdQuasistatic(Direction.kForward));
         joystick.start().and(joystick.x()).whileTrue(drivetrain.sysIdQuasistatic(Direction.kReverse));
 
-        // Reset the field-centric heading on left bumper press.
+        // Zera a referência de "Frente" (Field-Centric) do robô pressionando o Bumper Esquerdo.
+        // Importante caso o robô perca a referência do campo ou seja posicionado errado.
         joystick.leftBumper().onTrue(drivetrain.runOnce(drivetrain::seedFieldCentric));
 
+        // Registra a função do logger (do AdvantageScope/WPILog) para capturar telemetria do chassi
         drivetrain.registerTelemetry(logger::telemeterize);
     }
 
     public Command getAutonomousCommand() {
-        // Simple drive forward auton
+        // Comando autônomo temporário simples de "andar para a frente".
+        // O próximo passo do projeto seria usar o PathPlanner aqui (ex: AutoBuilder.buildAuto("AutoNome")).
         final var idle = new SwerveRequest.Idle();
+        final var drive = new SwerveRequest.FieldCentric()
+            .withDriveRequestType(DriveRequestType.Velocity);
+
         return Commands.sequence(
-            // Reset our field centric heading to match the robot
-            // facing away from our alliance station wall (0 deg).
+            // Primeiro, garantir que a orientação Field-Centric seja tratada como "0 graus" 
+            // no momento que o autônomo inicia, apontando pra longe da nossa área.
             drivetrain.runOnce(() -> drivetrain.seedFieldCentric(Rotation2d.kZero)),
-            // Then slowly drive forward (away from us) for 5 seconds.
+            
+            // Depois, aplica velocidade X por 5 segundos.
             drivetrain.applyRequest(() ->
-                drive.withVelocityX(0.5)
+                drive.withVelocityX(0.5) // Velocidade (m/s)
                     .withVelocityY(0)
                     .withRotationalRate(0)
             )
             .withTimeout(5.0),
-            // Finally idle for the rest of auton
+            
+            // Por fim, solta os motores para ficar Idle pelo resto do autônomo.
             drivetrain.applyRequest(() -> idle)
         );
     }
