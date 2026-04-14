@@ -22,7 +22,7 @@ import frc.robot.commands.drive.TeleopDrive;
 
 public class RobotContainer {
     
-
+//=================Variaveis para o modoLento
         private final double normalSpeedFactor = 1.0;
         private final double slowSpeedFactor = 0.35;
         private final double normalTurnFactor = 1.0;
